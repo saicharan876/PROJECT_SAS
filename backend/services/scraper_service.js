@@ -82,7 +82,8 @@ const scrapeSourceWithPuppeteer = async (source) => {
     await page.goto(source.url, { waitUntil: 'domcontentloaded', timeout: PAGE_LOAD_TIMEOUT_MS });
     await page.waitForSelector('a[href]', { timeout: SELECTOR_WAIT_TIMEOUT_MS });
 
-    const rawItems = await page.evaluate((baseUrl, maxItems, minNameLength) => {
+    const rawItems = await page.evaluate(
+      (baseUrl, maxItems, minNameLength, maxContextLength, maxDescriptionLength) => {
       const seen = new Set();
       const rows = [];
       const anchors = Array.from(document.querySelectorAll('a[href]'));
@@ -116,13 +117,19 @@ const scrapeSourceWithPuppeteer = async (source) => {
         rows.push({
           name,
           url: href,
-          context: fullText.slice(0, MAX_CONTEXT_LENGTH),
-          description: fullText.slice(0, MAX_CARD_DESCRIPTION_LENGTH),
+          context: fullText.slice(0, maxContextLength),
+          description: fullText.slice(0, maxDescriptionLength),
         });
       }
 
       return rows;
-    }, source.url, source.maxItems || DEFAULT_MAX_ITEMS, MIN_SCHOLARSHIP_NAME_LENGTH);
+      },
+      source.url,
+      source.maxItems || DEFAULT_MAX_ITEMS,
+      MIN_SCHOLARSHIP_NAME_LENGTH,
+      MAX_CONTEXT_LENGTH,
+      MAX_CARD_DESCRIPTION_LENGTH
+    );
 
     return rawItems.map((item) => {
       const context = normalizeText(item.context || item.description || item.name);
