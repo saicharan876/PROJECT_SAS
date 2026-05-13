@@ -31,8 +31,10 @@ export const authAPI = {
 
 // CV Builder
 export const cvAPI = {
-  generate: (data) => api.post('/cv/generate', data, { responseType: 'blob', timeout: 120000 }),
+  generate: (data) => api.post('/cv/generate', data, { timeout: 120000 }),
   fetchGithub: (data) => api.post('/cv/fetch-github', data),
+  generateBullets: (data) => api.post('/cv/generate-bullets', data, { timeout: 60000 }),
+  compileLaTeX: (data) => api.post('/cv/compile-latex', data, { timeout: 120000 }),
 };
 
 // ATS Checker

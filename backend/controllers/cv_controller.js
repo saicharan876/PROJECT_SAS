@@ -144,7 +144,10 @@ const generateCV = async (req, res) => {
       for (const repo of selectedRepos) {
         let bullets = [];
         try {
-          if (repo.readme) {
+          // Use pre-generated bullets from the frontend if available
+          if (repo.generatedBullets && Array.isArray(repo.generatedBullets) && repo.generatedBullets.length > 0) {
+            bullets = repo.generatedBullets;
+          } else if (repo.readme) {
             bullets = await pointsfromReadme(repo.readme);
           } else if (repo.description) {
             bullets = await generatePointsfromDescription(repo.description);
@@ -192,6 +195,20 @@ If any section (Education, Experience, etc.) is missing in both manual info and 
     // Generate structured CV data from LLM
     const structuredData = await generateJSON(CV_SYSTEM_PROMPT, userPrompt);
 
+    // FORCE-INJECT the processedRepos bullets into the LLM output
+    // The LLM often loses or empties bullet points, so we override them.
+    if (processedRepos.length > 0) {
+      structuredData.PROJECTS = processedRepos.map((pr, i) => {
+        const llmProj = (structuredData.PROJECTS || [])[i] || {};
+        return {
+          NAME: pr.name || llmProj.NAME || 'Project',
+          TECH: pr.tech || llmProj.TECH || 'N/A',
+          DATES: pr.dates || llmProj.DATES || 'N/A',
+          BULLETS: (pr.bullets && pr.bullets.length > 0) ? pr.bullets : (llmProj.BULLETS || [])
+        };
+      });
+    }
+
     // Build LaTeX sections
     const latexSections = buildLatexSections(structuredData);
 
@@ -206,6 +223,10 @@ If any section (Education, Experience, etc.) is missing in both manual info and 
       SECTIONS: latexSections
     };
 
+    // Generate the full LaTeX source for the editor
+    const { injectIntoTemplate } = require('../services/latex_service');
+    const latexSource = injectIntoTemplate('cv_template.tex', templateData);
+
     // Update resume record
     resume.generatedData = templateData;
 
@@ -216,14 +237,17 @@ If any section (Education, Experience, etc.) is missing in both manual info and 
       resume.status = 'completed';
       await resume.save();
 
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="cv_${resume._id}.pdf"`);
+      // Read PDF as base64 so we can also return the LaTeX source
+      const pdfBuffer = fs.readFileSync(pdfPath);
+      const pdfBase64 = pdfBuffer.toString('base64');
 
-      const stream = fs.createReadStream(pdfPath);
-      stream.pipe(res);
+      cleanupJob(jobId);
 
-      stream.on('end', () => {
-        cleanupJob(jobId);
+      res.status(200).json({
+        success: true,
+        pdfBase64,
+        latexSource,
+        resumeId: resume._id,
       });
     } catch (latexError) {
       resume.status = 'failed';
@@ -233,6 +257,7 @@ If any section (Education, Experience, etc.) is missing in both manual info and 
       res.status(200).json({
         success: true,
         message: 'CV data generated but PDF compilation failed.',
+        latexSource,
         data: templateData,
         resumeId: resume._id,
         error: latexError.message,
@@ -243,7 +268,7 @@ If any section (Education, Experience, etc.) is missing in both manual info and 
     res.status(500).json({ success: false, message: error.message || 'CV generation failed.' });
   }
 };
-};
+
 
 /**
  * @desc    Generate 3 bullet points for a project based on its README or description
@@ -292,4 +317,29 @@ const generateProjectBullets = async (req, res) => {
   }
 };
 
-module.exports = { generateCV, generateProjectBullets };
+/**
+ * @desc    Compile raw LaTeX source to PDF (for the editor)
+ * @route   POST /api/cv/compile-latex
+ */
+const compileLaTeX = async (req, res) => {
+  try {
+    const { latexSource } = req.body;
+    if (!latexSource) {
+      return res.status(400).json({ success: false, message: 'LaTeX source is required.' });
+    }
+
+    const { compileToPdf, cleanupJob } = require('../services/latex_service');
+    const { pdfPath, jobId } = await compileToPdf(latexSource);
+
+    const pdfBuffer = fs.readFileSync(pdfPath);
+    const pdfBase64 = pdfBuffer.toString('base64');
+    cleanupJob(jobId);
+
+    res.status(200).json({ success: true, pdfBase64 });
+  } catch (error) {
+    console.error('LaTeX compile error:', error);
+    res.status(500).json({ success: false, message: error.message || 'Compilation failed.' });
+  }
+};
+
+module.exports = { generateCV, generateProjectBullets, compileLaTeX };

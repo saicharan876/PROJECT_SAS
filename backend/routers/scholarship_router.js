@@ -7,7 +7,8 @@ const {
 const authMiddleware = require('../middleware/auth_middleware');
 
 // GET /api/scholarships (protected)
-router.get('/', authMiddleware, getScholarships);
+// router.get('/', authMiddleware, getScholarships);
+router.get('/', getScholarships);
 
 // POST /api/scholarships/scrape (protected — admin/manual trigger)
 router.post('/scrape', authMiddleware, triggerScrape);
