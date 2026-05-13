@@ -15,6 +15,8 @@ const SOURCES = [
 
 const PAGE_LOAD_TIMEOUT_MS = 45000;
 const SELECTOR_WAIT_TIMEOUT_MS = 15000;
+const DEFAULT_MAX_ITEMS = 30;
+const MIN_SCHOLARSHIP_NAME_LENGTH = 12;
 const MAX_CONTEXT_LENGTH = 450;
 const MAX_CARD_DESCRIPTION_LENGTH = 220;
 const MAX_DB_DESCRIPTION_LENGTH = 350;
@@ -22,19 +24,15 @@ const MAX_DB_DESCRIPTION_LENGTH = 350;
 const normalizeText = (value = '') => value.replace(/\s+/g, ' ').trim();
 
 const parseAmount = (text = '') => {
-  const match = text.match(/\$\s?\d[\d,]*(?:\s?-\s?\$\s?\d[\d,]*)?/);
+  const match = text.match(/\$\s?[\d,]+(?:\s?-\s?\$\s?[\d,]+)?/);
   return match ? normalizeText(match[0]) : 'Varies';
 };
 
 const parseDeadline = (text = '') => {
-  const patterns = [/(?:deadline|apply by|last date)[:\s-]*([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i];
-
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (!match) continue;
-    const parsed = new Date(match[1]);
-    if (!Number.isNaN(parsed.getTime())) return parsed;
-  }
+  const match = text.match(/(?:deadline|apply by|last date)[:\s-]*([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i);
+  if (!match) return undefined;
+  const parsed = new Date(match[1]);
+  if (!Number.isNaN(parsed.getTime())) return parsed;
 
   return undefined;
 };
@@ -84,7 +82,7 @@ const scrapeSourceWithPuppeteer = async (source) => {
     await page.goto(source.url, { waitUntil: 'domcontentloaded', timeout: PAGE_LOAD_TIMEOUT_MS });
     await page.waitForSelector('a[href]', { timeout: SELECTOR_WAIT_TIMEOUT_MS });
 
-    const rawItems = await page.evaluate((baseUrl, maxItems) => {
+    const rawItems = await page.evaluate((baseUrl, maxItems, minNameLength) => {
       const seen = new Set();
       const rows = [];
       const anchors = Array.from(document.querySelectorAll('a[href]'));
@@ -92,7 +90,7 @@ const scrapeSourceWithPuppeteer = async (source) => {
       for (const anchor of anchors) {
         if (rows.length >= maxItems) break;
         const name = (anchor.innerText || '').replace(/\s+/g, ' ').trim();
-        if (!name || name.length < 12) continue;
+        if (!name || name.length < minNameLength) continue;
 
         let href = anchor.getAttribute('href') || '';
         if (!href || href.startsWith('#')) continue;
@@ -124,7 +122,7 @@ const scrapeSourceWithPuppeteer = async (source) => {
       }
 
       return rows;
-    }, source.url, source.maxItems || 30);
+    }, source.url, source.maxItems || DEFAULT_MAX_ITEMS, MIN_SCHOLARSHIP_NAME_LENGTH);
 
     return rawItems.map((item) => {
       const context = normalizeText(item.context || item.description || item.name);
@@ -166,13 +164,27 @@ const enrichWithAI = async (scholarships) => {
 
     try {
       const enrichedChunk = await generateJSON(systemPrompt, JSON.stringify(chunk));
-      if (Array.isArray(enrichedChunk) && enrichedChunk.length === chunk.length) {
-        for (let idx = 0; idx < chunk.length; idx++) {
-          const base = chunk[idx];
-          const ai = enrichedChunk[idx] && typeof enrichedChunk[idx] === 'object' ? enrichedChunk[idx] : {};
+      if (Array.isArray(enrichedChunk)) {
+        const aiByUrl = new Map(
+          enrichedChunk
+            .filter((item) => item && typeof item === 'object' && item.url)
+            .map((item) => [normalizeText(item.url), item])
+        );
+        const aiByName = new Map(
+          enrichedChunk
+            .filter((item) => item && typeof item === 'object' && item.name)
+            .map((item) => [normalizeText(item.name).toLowerCase(), item])
+        );
+
+        for (const base of chunk) {
+          const ai =
+            aiByUrl.get(base.url) ||
+            aiByName.get(base.name.toLowerCase()) ||
+            {};
+
           enrichedScholarships.push({
             ...base,
-            ...ai,
+            ...(typeof ai === 'object' ? ai : {}),
             name: base.name,
             url: base.url,
             provider: base.provider,
