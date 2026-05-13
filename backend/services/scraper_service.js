@@ -18,7 +18,6 @@ const SELECTOR_WAIT_TIMEOUT_MS = 15000;
 const MAX_CONTEXT_LENGTH = 450;
 const MAX_CARD_DESCRIPTION_LENGTH = 220;
 const MAX_DB_DESCRIPTION_LENGTH = 350;
-const DEDUP_KEY_SEPARATOR = '::';
 
 const normalizeText = (value = '') => value.replace(/\s+/g, ' ').trim();
 
@@ -97,7 +96,9 @@ const scrapeSourceWithPuppeteer = async (source) => {
 
         let href = anchor.getAttribute('href') || '';
         if (!href || href.startsWith('#')) continue;
-        if (!/scholarship|award|grant/i.test(`${name} ${href}`)) continue;
+        if (!/scholarship|award|grant|fellowship|bursary|financial\s*aid/i.test(`${name} ${href}`)) {
+          continue;
+        }
 
         try {
           const parsedUrl = new URL(href, baseUrl);
@@ -165,7 +166,7 @@ const enrichWithAI = async (scholarships) => {
 
     try {
       const enrichedChunk = await generateJSON(systemPrompt, JSON.stringify(chunk));
-      if (Array.isArray(enrichedChunk)) {
+      if (Array.isArray(enrichedChunk) && enrichedChunk.length === chunk.length) {
         for (let idx = 0; idx < chunk.length; idx++) {
           const base = chunk[idx];
           const ai = enrichedChunk[idx] && typeof enrichedChunk[idx] === 'object' ? enrichedChunk[idx] : {};
@@ -209,10 +210,7 @@ const scrapeAndStoreScholarships = async () => {
     new Map(
       scrapedScholarships
         .filter((item) => item.name && item.url)
-        .map((item) => [
-          `${item.name.toLowerCase()}${DEDUP_KEY_SEPARATOR}${item.url.toLowerCase()}`,
-          item,
-        ])
+        .map((item) => [JSON.stringify([item.name.toLowerCase(), item.url.toLowerCase()]), item])
     ).values()
   );
 
