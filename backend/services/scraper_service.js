@@ -13,6 +13,13 @@ const SOURCES = [
   },
 ];
 
+const PAGE_LOAD_TIMEOUT_MS = 45000;
+const SELECTOR_WAIT_TIMEOUT_MS = 15000;
+const MAX_CONTEXT_LENGTH = 450;
+const MAX_CARD_DESCRIPTION_LENGTH = 220;
+const MAX_DB_DESCRIPTION_LENGTH = 350;
+const DEDUP_KEY_SEPARATOR = '::';
+
 const normalizeText = (value = '') => value.replace(/\s+/g, ' ').trim();
 
 const parseAmount = (text = '') => {
@@ -78,8 +85,8 @@ const scrapeSourceWithPuppeteer = async (source) => {
     await page.setUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36'
     );
-    await page.goto(source.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-    await page.waitForSelector('a[href]', { timeout: 15000 });
+    await page.goto(source.url, { waitUntil: 'domcontentloaded', timeout: PAGE_LOAD_TIMEOUT_MS });
+    await page.waitForSelector('a[href]', { timeout: SELECTOR_WAIT_TIMEOUT_MS });
 
     const rawItems = await page.evaluate((baseUrl, maxItems) => {
       const seen = new Set();
@@ -92,11 +99,13 @@ const scrapeSourceWithPuppeteer = async (source) => {
         if (!name || name.length < 12) continue;
 
         let href = anchor.getAttribute('href') || '';
-        if (!href || href.startsWith('#') || href.startsWith('javascript:')) continue;
+        if (!href || href.startsWith('#')) continue;
         if (!/scholarship|award|grant/i.test(`${name} ${href}`)) continue;
 
         try {
-          href = new URL(href, baseUrl).href;
+          const parsedUrl = new URL(href, baseUrl);
+          if (!['http:', 'https:'].includes(parsedUrl.protocol)) continue;
+          href = parsedUrl.href;
         } catch {
           continue;
         }
@@ -111,8 +120,8 @@ const scrapeSourceWithPuppeteer = async (source) => {
         rows.push({
           name,
           url: href,
-          context: description.slice(0, 450),
-          description: description.slice(0, 220),
+          context: description.slice(0, MAX_CONTEXT_LENGTH),
+          description: description.slice(0, MAX_CARD_DESCRIPTION_LENGTH),
         });
       }
 
@@ -132,7 +141,7 @@ const scrapeSourceWithPuppeteer = async (source) => {
         country: inferCountry(context),
         degreeLevel: inferDegreeLevel(context),
         fieldOfStudy: inferField(context),
-        description: normalizeText(item.description || context).slice(0, 350),
+        description: normalizeText(item.description || context).slice(0, MAX_DB_DESCRIPTION_LENGTH),
         url,
         eligibility: [],
         source: source.name,
@@ -203,7 +212,10 @@ const scrapeAndStoreScholarships = async () => {
     new Map(
       scrapedScholarships
         .filter((item) => item.name && item.url)
-        .map((item) => [`${item.name.toLowerCase()}::${item.url.toLowerCase()}`, item])
+        .map((item) => [
+          `${item.name.toLowerCase()}${DEDUP_KEY_SEPARATOR}${item.url.toLowerCase()}`,
+          item,
+        ])
     ).values()
   );
 
