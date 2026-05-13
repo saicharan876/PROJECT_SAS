@@ -28,10 +28,7 @@ const parseAmount = (text = '') => {
 };
 
 const parseDeadline = (text = '') => {
-  const patterns = [
-    /(?:deadline|apply by|last date)[:\s-]*([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i,
-    /(?:deadline|apply by|last date)[:\s-]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i,
-  ];
+  const patterns = [/(?:deadline|apply by|last date)[:\s-]*([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i];
 
   for (const pattern of patterns) {
     const match = text.match(pattern);
@@ -113,15 +110,15 @@ const scrapeSourceWithPuppeteer = async (source) => {
         if (seen.has(href)) continue;
         seen.add(href);
 
-        const container = anchor.closest('article, li, .card, .listing, .item, section, div');
+        const container = anchor.closest('article, li, .card, .listing, .item') || anchor.parentElement;
         const contextText = (container ? container.innerText : anchor.innerText) || '';
-        const description = contextText.replace(/\s+/g, ' ').trim();
+        const fullText = contextText.replace(/\s+/g, ' ').trim();
 
         rows.push({
           name,
           url: href,
-          context: description.slice(0, MAX_CONTEXT_LENGTH),
-          description: description.slice(0, MAX_CARD_DESCRIPTION_LENGTH),
+          context: fullText.slice(0, MAX_CONTEXT_LENGTH),
+          description: fullText.slice(0, MAX_CARD_DESCRIPTION_LENGTH),
         });
       }
 
@@ -225,20 +222,23 @@ const scrapeAndStoreScholarships = async () => {
 
   const enriched = await enrichWithAI(deduped);
 
-  await Scholarship.updateMany(
-    { source: { $in: SOURCES.map((source) => source.name) } },
-    { $set: { isActive: false } }
-  );
-
   let stored = 0;
+  const activeIds = [];
+  const sourceNames = SOURCES.map((source) => source.name);
   for (const s of enriched) {
-    await Scholarship.findOneAndUpdate(
+    const updated = await Scholarship.findOneAndUpdate(
       { name: s.name, provider: s.provider },
       { ...s, lastScrapedAt: new Date(), isActive: true },
-      { upsert: true, setDefaultsOnInsert: true }
+      { upsert: true, setDefaultsOnInsert: true, new: true }
     );
+    if (updated?._id) activeIds.push(updated._id);
     stored++;
   }
+
+  await Scholarship.updateMany(
+    { source: { $in: sourceNames }, _id: { $nin: activeIds } },
+    { $set: { isActive: false } }
+  );
 
   return { scraped: deduped.length, stored };
 };
